@@ -58,6 +58,7 @@ class ICLEVRDataset(Dataset):
         self.num_classes = len(objects_map)
         self.images_base_path = images_base_path
         self.mode = mode # "train", "test"
+        self.tag = mode  # keep a simple tag for later use
 
         if self.mode == "train":
             self.image_files = list(self.data.keys())
@@ -163,14 +164,15 @@ evaluator.resnet18.eval() # Set to eval mode
 
 @torch.no_grad()
 def evaluate_model(
-    dataset_name: str,
-    ddpm_model: UNet2DConditionModel, cond_projector: nn.Linear, 
+    dataloader: DataLoader,
+    ddpm_model: UNet2DConditionModel, cond_projector: nn.Linear,
     scheduler: DDPMScheduler, evaluator_obj: evaluation_model,
-    test_labels_one_hot_tensor, epoch_num, config
+    epoch_num: int, config
 ):
     ddpm_model.eval()
     cond_projector.eval()
-    
+    tag = dataloader.dataset.mode  # "test" | "new_test"
+
     # 根據採樣器類型設置適當的步數
     if isinstance(scheduler, DPMSolverMultistepScheduler):
         inference_steps = config["dpm_solver_steps"]  # DPM-Solver++ 使用較少步數
@@ -178,10 +180,8 @@ def evaluate_model(
         inference_steps = config["num_inference_steps"]  # DDPM 使用標準步數
 
     all_generated_images = []
-    # Use a DataLoader for the labels to handle batching
-    eval_labels_dataloader = DataLoader(test_labels_one_hot_tensor, batch_size=config["eval_batch_size"], shuffle=False)
-
-    for batch_labels in tqdm(eval_labels_dataloader, desc=f"Generating for eval epoch {epoch_num}"):
+    all_labels = []
+    for batch_labels in tqdm(dataloader, desc=f"Generating for eval epoch {epoch_num} ({tag})"):
         batch_labels = batch_labels.to(config["device"]) # Ensure labels are on the correct device
         generated_batch = generate_images(
             ddpm_model, cond_projector, scheduler, evaluator_obj,
@@ -190,23 +190,25 @@ def evaluate_model(
             device=config["device"], num_inference_steps=inference_steps
         )
         all_generated_images.append(generated_batch.cpu())
-    
+        all_labels.append(batch_labels.cpu())
+
     all_generated_images_tensor = torch.cat(all_generated_images, dim=0)
 
-    # Ensure ground truth labels are also on CPU for the evaluator's compute_acc
-    accuracy = evaluator_obj.eval(all_generated_images_tensor.to(config["device"]), test_labels_one_hot_tensor.cpu())
+    accuracy = evaluator_obj.eval(
+        all_generated_images_tensor.to(config["device"]),
+        torch.cat(all_labels, dim=0).to(config["device"])
+    )
 
-    save_path = os.path.join(config["results_folder"], f"epoch_{epoch_num}_eval_{dataset_name}_samples.png")
+    save_path = os.path.join(config["results_folder"], f"epoch_{epoch_num}_eval_{tag}_samples.png")
     grid_eval = make_grid(denormalize(all_generated_images_tensor), nrow=8)
     save_image(grid_eval, save_path)
     print(f"Saved epoch {epoch_num} evaluation grid to {save_path}")
 
     wandb.log({
-        f"eval/{dataset_name}_samples": wandb.Image(grid_eval, caption=f"{dataset_name} - Epoch {epoch_num}"),
-        f"eval/{dataset_name}_accuracy": accuracy,
+        f"eval/{tag}_accuracy": accuracy,
         "epoch": epoch_num
     })
-    
+
     return accuracy
 
 # --- Sampling/Generation Function ---
@@ -294,8 +296,7 @@ def generate_images(ddpm_model, cond_projector, scheduler, evaluator_obj,
 
     if return_denoising_process:
         # also add final clear image
-        if not (scheduler.timesteps[-1] % (num_inference_steps // 8) == 0 or scheduler.timesteps[-1] == scheduler.timesteps[-1]):
-             denoising_process_images.append(images[0].unsqueeze(0).clone().cpu())
+        denoising_process_images.append(images[0].unsqueeze(0).clone().cpu())
         return images, torch.cat(denoising_process_images, dim=0)
     
     return images
@@ -335,9 +336,8 @@ def evaluate_model_with_labels(
     print(f"Epoch {epoch_num} - Accuracy on new_test.json: {accuracy_new_test:.4f}")
     return accuracy_test, accuracy_new_test
 
-# --- Training Function ---
 def train_loop(config, model, condition_projector, noise_scheduler, optimizer, lr_scheduler, train_dataloader,
-               test_labels_eval_tensor, evaluator_obj): # <<< Added test_labels_eval_tensor and evaluator_obj
+               test_loader_eval, evaluator_obj):
     model.train()
     condition_projector.train()
     global_step = 0
@@ -430,12 +430,6 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
             save_image(grid, save_path)
             print(f"Saved sample images to {save_path}")
 
-            # 記錄圖像到 wandb
-            wandb.log({
-                "generated_samples": wandb.Image(grid, caption=f"Epoch {epoch+1} Samples"),
-                "epoch": epoch
-            })
-
             model.train() # Set back to train mode
             condition_projector.train()
 
@@ -443,13 +437,12 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
         # <<< Periodic Evaluation >>>
         if (epoch + 1) % config["eval_epochs"] == 0 or epoch == config["num_epochs"] - 1:
             current_eval_accuracy = evaluate_model(
-                dataset_name="test.json",
-                ddpm_model=model, 
-                cond_projector=condition_projector, 
-                scheduler=inference_scheduler , 
+                test_loader_eval,
+                ddpm_model=model,
+                cond_projector=condition_projector,
+                scheduler=inference_scheduler,
                 evaluator_obj=evaluator_obj,
-                test_labels_one_hot_tensor=test_labels_eval_tensor, 
-                epoch_num=epoch + 1, 
+                epoch_num=epoch + 1,
                 config=config
             )
             # 記錄評估指標到 wandb
@@ -485,7 +478,6 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
             }, model_path)
             print(f"Saved model checkpoint at epoch {epoch+1}")
     
-    progress_bar.close()
     final_model_path = config["model_save_path"]
     torch.save({
         'model_state_dict': model.state_dict(),
@@ -522,9 +514,13 @@ if __name__ == "__main__":
     
     # Test datasets (only labels)
     test_dataset_for_eval = ICLEVRDataset(CONFIG["test_json_path"], objects_map, "", CONFIG["image_size"], mode="test")
-    test_labels_one_hot_list_for_eval = [test_dataset_for_eval[i] for i in range(len(test_dataset_for_eval))]
-    # test_labels_eval_tensor = torch.stack(test_labels_one_hot_list_for_eval).to(device) # Move to device inside evaluate_model or pass device
-    test_labels_eval_tensor = torch.stack(test_labels_one_hot_list_for_eval) # Keep on CPU, move to device in batches in evaluate_model
+    test_loader_eval = DataLoader(
+        test_dataset_for_eval,
+        batch_size=CONFIG["eval_batch_size"],
+        shuffle=False,
+        num_workers=2,
+        pin_memory=True
+    )
 
 
     # --- 2. Train Model (or load if exists) ---
@@ -534,9 +530,8 @@ if __name__ == "__main__":
     
     if TRAIN_MODEL:
         print("Starting training...")
-        # Pass test_labels_eval_tensor and evaluator to train_loop
         train_loop(CONFIG, model, condition_projector, noise_scheduler, optimizer, lr_scheduler, train_dataloader,
-                   test_labels_eval_tensor, evaluator) # <<< Pass evaluator
+                   test_loader_eval, evaluator)
     else:
         print(f"Loading pre-trained model from {model_load_path}") # Use model_load_path
         if os.path.exists(model_load_path):
@@ -575,19 +570,23 @@ if __name__ == "__main__":
     
     # Test.json evaluation
     test_dataset = ICLEVRDataset(CONFIG["test_json_path"], objects_map, "", CONFIG["image_size"], mode="test")
-    test_labels_one_hot_list = [test_dataset[i] for i in range(len(test_dataset))]
-    test_labels_one_hot_tensor = torch.stack(test_labels_one_hot_list) # CPU tensor
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=CONFIG["eval_batch_size"],
+        shuffle=False,
+        num_workers=2,
+        pin_memory=True
+    )
 
     final_accuracy_test = evaluate_model(
-        dataset_name="test.json",
-        ddpm_model=model, 
-        cond_projector=condition_projector, 
-        scheduler=inference_scheduler, 
-        evaluator_obj=evaluator, 
-        test_labels_one_hot_tensor=test_labels_one_hot_tensor, 
-        epoch_num=CONFIG["num_epochs"], 
+        test_loader,
+        ddpm_model=model,
+        cond_projector=condition_projector,
+        scheduler=inference_scheduler,
+        evaluator_obj=evaluator,
+        epoch_num=CONFIG["num_epochs"],
         config=CONFIG
-    ) # Pass full CONFIG
+    )
     print(f"Final Accuracy on test.json: {final_accuracy_test:.4f}")
     plt.figure(figsize=(3,1))
     plt.text(0.5, 0.5, f"Final test.json Accuracy: {final_accuracy_test:.4f}", ha='center', va='center', fontsize=12)
@@ -596,20 +595,24 @@ if __name__ == "__main__":
     # plt.show() # Can be blocking
 
     # New_test.json evaluation
-    new_test_dataset = ICLEVRDataset(CONFIG["new_test_json_path"], objects_map, "", CONFIG["image_size"], mode="test")
-    new_test_labels_one_hot_list = [new_test_dataset[i] for i in range(len(new_test_dataset))]
-    new_test_labels_one_hot_tensor = torch.stack(new_test_labels_one_hot_list) # CPU tensor
+    new_test_dataset = ICLEVRDataset(CONFIG["new_test_json_path"], objects_map, "", CONFIG["image_size"], mode="new_test")
+    new_test_loader = DataLoader(
+        new_test_dataset,
+        batch_size=CONFIG["eval_batch_size"],
+        shuffle=False,
+        num_workers=2,
+        pin_memory=True
+    )
 
-    final_accuracy_new_test = evaluate_model( ## 
-        dataset_name="new_test.json",
-        ddpm_model=model, 
-        cond_projector=condition_projector, 
-        scheduler=inference_scheduler, 
+    final_accuracy_new_test = evaluate_model(
+        new_test_loader,
+        ddpm_model=model,
+        cond_projector=condition_projector,
+        scheduler=inference_scheduler,
         evaluator_obj=evaluator,
-        test_labels_one_hot_tensor=new_test_labels_one_hot_tensor, 
-        epoch_num=CONFIG["num_epochs"], 
+        epoch_num=CONFIG["num_epochs"],
         config=CONFIG
-    ) # Pass full CONFIG
+    )
     print(f"Final Accuracy on new_test.json: {final_accuracy_new_test:.4f}")
     plt.figure(figsize=(3,1))
     plt.text(0.5, 0.5, f"Final new_test.json Accuracy: {final_accuracy_new_test:.4f}", ha='center', va='center', fontsize=12)

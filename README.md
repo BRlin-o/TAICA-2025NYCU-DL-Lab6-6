@@ -30,6 +30,7 @@ pip install -r requirements.txt
 project_folder/
 ├── train.py               # 您的主程式碼
 ├── evaluator.py           # 提供的評估器
+├── utils.py               # 輔助
 ├── checkpoint.pth         # 評估器權重
 ├── train.json             # 訓練資料標籤
 ├── test.json              # 測試資料標籤
