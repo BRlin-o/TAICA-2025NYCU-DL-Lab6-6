@@ -100,6 +100,7 @@ def evaluate_model(
     epoch_num: int,
     config,
     save_individual_images: bool = False,   # NEW ▸ save PNGs for each sample
+    use_wandb: bool = False,  # NEW ▸ log to wandb
 ):
     ddpm_model.eval()
     cond_projector.eval()
@@ -145,10 +146,11 @@ def evaluate_model(
     save_image(grid_eval, save_path)
     print(f"Saved epoch {epoch_num} evaluation grid to {save_path}")
 
-    wandb.log({
-        f"eval/{tag}_accuracy": accuracy,
-        "epoch": epoch_num
-    })
+    if use_wandb:
+        wandb.log({
+            f"eval/{tag}_accuracy": accuracy,
+            "epoch": epoch_num
+        })
 
     return accuracy
 
@@ -349,7 +351,8 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
                 scheduler=inference_scheduler,
                 evaluator_obj=evaluator_obj,
                 epoch_num=epoch + 1,
-                config=config
+                config=config,
+                use_wandb=True,  # Log to wandb
             )
             # 記錄評估指標到 wandb
             wandb.log({
@@ -430,10 +433,6 @@ if __name__ == "__main__":
         num_workers=2,
         pin_memory=True
     )
-
-
-    # --- 2. Train Model (or load if exists) ---
-    model_load_path = CONFIG["model_save_path"] # Default final model
     
     if args.mode == "train":
         run = wandb.init(
@@ -447,19 +446,12 @@ if __name__ == "__main__":
                    test_loader_eval, evaluator)
         wandb.finish()
     else:
+        model_load_path = CONFIG["best_model_save_path"] # Default final model
         print(f"Loading pre-trained model from {model_load_path}") # Use model_load_path
         if os.path.exists(model_load_path):
             checkpoint = torch.load(model_load_path, map_location=device)
             model.load_state_dict(checkpoint['model_state_dict'])
             condition_projector.load_state_dict(checkpoint['condition_projector_state_dict'])
-            # Optionally load optimizer, lr_scheduler, epoch if continuing training
-            # if 'optimizer_state_dict' in checkpoint:
-            #     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            # if 'lr_scheduler_state_dict' in checkpoint:
-            #     lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])
-            # if 'epoch' in checkpoint:
-            #     start_epoch = checkpoint['epoch'] + 1 # resume from next epoch
-            #     print(f"Resuming training from epoch {start_epoch}")
             model.to(device)
             condition_projector.to(device)
             print("Model loaded successfully.")
@@ -469,9 +461,6 @@ if __name__ == "__main__":
 
     # --- 3. Final Evaluation ---
     print("\n--- Final Evaluation ---")
-    # Load the best model for final evaluation if desired, or use the last one.
-    # If you saved "_best_eval", you might want to load it here.
-    # For simplicity, we'll use the model currently in memory (either last epoch or loaded).
     inference_scheduler = get_inference_scheduler(CONFIG)
 
     # 如果使用 DPM-Solver++，顯示相關信息
@@ -503,11 +492,6 @@ if __name__ == "__main__":
         save_individual_images=True
     )
     print(f"Final Accuracy on test.json: {final_accuracy_test:.4f}")
-    plt.figure(figsize=(3,1))
-    plt.text(0.5, 0.5, f"Final test.json Accuracy: {final_accuracy_test:.4f}", ha='center', va='center', fontsize=12)
-    plt.axis('off')
-    plt.savefig(os.path.join(CONFIG["results_folder"], "accuracy_final_test_json.png"))
-    # plt.show() # Can be blocking
 
     # New_test.json evaluation
     new_test_dataset = ICLEVRDataset(CONFIG["new_test_json_path"], objects_map, "", CONFIG["image_size"], mode="new_test")
@@ -529,15 +513,8 @@ if __name__ == "__main__":
         config=CONFIG,
         save_individual_images=True
     )
-    print(f"Final Accuracy on new_test.json: {final_accuracy_new_test:.4f}")
-    plt.figure(figsize=(3,1))
-    plt.text(0.5, 0.5, f"Final new_test.json Accuracy: {final_accuracy_new_test:.4f}", ha='center', va='center', fontsize=12)
-    plt.axis('off')
-    plt.savefig(os.path.join(CONFIG["results_folder"], "accuracy_final_new_test_json.png"))
-    # plt.show()
 
     # --- 4. Show Denoising Process ---
-    # (This part remains the same, ensure model is in eval mode if not already)
     model.eval()
     condition_projector.eval()
     print("\nGenerating denoising process visualization...")

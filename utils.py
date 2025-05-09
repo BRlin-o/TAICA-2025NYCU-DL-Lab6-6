@@ -39,7 +39,8 @@ class Config(dict):
             "eval_epochs": 1, # 5
             # ── paths ──
             "results_folder": "./results",
-            "model_save_path": "./ddpm_conditional_iclevr.pth",
+            "model_save_path": "./ddpm_cond_unet.pth",
+            "best_model_save_path": "./ddpm_conditional_iclevr_best_eval_v1.pth",
             "images_base_path": "./iclevr/",
             "train_json_path": "./train.json",
             "test_json_path": "./test.json",
