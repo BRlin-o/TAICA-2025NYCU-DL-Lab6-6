@@ -1,0 +1,14 @@
+Loading pre-trained model from ./ddpm_conditional_iclevr_best_eval_v1.pth
+Model loaded successfully.
+--- Final Evaluation ---
+使用 DDPM 進行採樣，步數: 50
+Sampling: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 50/50 [00:05<00:00,  8.88it/s]
+Generating for eval epoch 200 (test): 100%|█████████████████████████████████████████████████████████████████████████████████████████████| 1/1 [00:14<00:00, 14.35s/it]
+Final Accuracy on test.json: 0.9167
+Sampling: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 50/50 [00:05<00:00,  9.72it/s]
+Generating for eval epoch 200 (new_test): 100%|█████████████████████████████████████████████████████████████████████████████████████████| 1/1 [00:13<00:00, 13.23s/it]
+Final Accuracy on new_test.json: 0.9286
+Generating denoising process visualization...
+Sampling: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 50/50 [00:02<00:00, 22.39it/s] 
+Saved denoising process grid to images/denoising_process.png
+Lab 6 execution finished.
