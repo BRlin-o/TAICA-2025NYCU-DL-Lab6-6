@@ -13,6 +13,9 @@ import wandb  # 添加 wandb 導入
 from diffusers import UNet2DConditionModel, DDPMScheduler, DPMSolverMultistepScheduler
 from diffusers.optimization import get_cosine_schedule_with_warmup
 
+# --- For EMA shadow copies ---
+import copy
+
 # Import the evaluator
 from evaluator import evaluation_model # Make sure evaluator.py is in the same directory or accessible
 from utils import build_model_path, load_json, denormalize, get_inference_scheduler
@@ -64,6 +67,11 @@ model_wrapper = UNetConditionModel(num_classes, CONFIG).to(device)
 model = model_wrapper.unet
 condition_projector = model_wrapper.projector
 
+# --- EMA shadow networks ---
+ema_rate = CONFIG["ema_rate"]
+ema_model = copy.deepcopy(model).to(device).eval()
+ema_projector = copy.deepcopy(condition_projector).to(device).eval()
+
 # Noise Scheduler (from diffusers)
 noise_scheduler = DDPMScheduler(
     num_train_timesteps=CONFIG["num_train_timesteps"],
@@ -87,6 +95,12 @@ lr_scheduler = get_cosine_schedule_with_warmup(
 evaluator = evaluation_model()
 evaluator.resnet18.to(device) # Move evaluator's model to device for guidance
 evaluator.resnet18.eval()
+
+# ---------- EMA utilities ----------
+@torch.no_grad()
+def ema_update(target_net, source_net, rate: float):
+    for p_t, p_s in zip(target_net.parameters(), source_net.parameters()):
+        p_t.data.mul_(rate).add_(p_s.data, alpha=1.0 - rate)
 
 @torch.no_grad()
 def evaluate_model(
@@ -233,12 +247,15 @@ def compute_p2_loss_weight(scheduler, timesteps, gamma: float = 5.0, device=None
     snr = alphas / (1.0 - alphas)               # signal-to-noise ratio
     return (snr + 1.0) / (snr + gamma)
 
-def train_loop(config, model, condition_projector, noise_scheduler, optimizer, lr_scheduler, train_dataloader,
-               test_loader_eval, evaluator_obj):
+def train_loop(config, model, condition_projector, ema_model, ema_projector,
+               noise_scheduler, optimizer, lr_scheduler,
+               train_dataloader, test_loader_eval, evaluator_obj):
     model.train()
     condition_projector.train()
     global_step = 0
     best_eval_accuracy = 0.0 # To save the best model based on eval
+
+    rate = config["ema_rate"]
 
     # 獲取用於推理的排程器
     inference_scheduler = get_inference_scheduler(config)
@@ -285,6 +302,10 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
             lr_scheduler.step()
             optimizer.zero_grad()
 
+            # ---- EMA update ----
+            ema_update(ema_model, model, rate)
+            ema_update(ema_projector, condition_projector, rate)
+
             # 記錄訓練指標到 wandb
             wandb.log({
                 "train/loss": loss.item(),
@@ -320,7 +341,7 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
             fixed_labels_one_hot = torch.stack(fixed_labels_one_hot).to(device)
 
             generated_images = generate_images(
-                model, condition_projector, inference_scheduler, evaluator_obj, # Pass evaluator_obj
+                ema_model, ema_projector, inference_scheduler, evaluator_obj, # Use EMA models
                 fixed_labels_one_hot, num_images_per_prompt=1,
                 use_guidance=config["use_classifier_guidance"], guidance_scale=config["guidance_scale"],
                 device=device, num_inference_steps=config["num_inference_steps"]
@@ -340,8 +361,8 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
         if (epoch + 1) % config["eval_epochs"] == 0 or epoch == config["num_epochs"] - 1:
             current_eval_accuracy = evaluate_model(
                 test_loader_eval,
-                ddpm_model=model,
-                cond_projector=condition_projector,
+                ddpm_model=ema_model,
+                cond_projector=ema_projector,
                 scheduler=inference_scheduler,
                 evaluator_obj=evaluator_obj,
                 epoch_num=epoch + 1,
@@ -439,8 +460,9 @@ if __name__ == "__main__":
             save_code=True  # 保存代碼版本
         )
         print("Starting training...")
-        train_loop(CONFIG, model, condition_projector, noise_scheduler, optimizer, lr_scheduler, train_dataloader,
-                   test_loader_eval, evaluator)
+        train_loop(CONFIG, model, condition_projector, ema_model, ema_projector,
+                   noise_scheduler, optimizer, lr_scheduler,
+                   train_dataloader, test_loader_eval, evaluator)
         wandb.finish()
     else:
         print(f"Loading pre-trained model from {model_load_path}") # Use model_load_path
@@ -488,10 +510,14 @@ if __name__ == "__main__":
         pin_memory=True
     )
 
+    # Use EMA‑smoothed weights for the final evaluation
+    model_to_use = ema_model
+    projector_to_use = ema_projector
+
     final_accuracy_test = evaluate_model(
         test_loader,
-        ddpm_model=model,
-        cond_projector=condition_projector,
+        ddpm_model=model_to_use,
+        cond_projector=projector_to_use,
         scheduler=inference_scheduler,
         evaluator_obj=evaluator,
         epoch_num=CONFIG["num_epochs"],
@@ -512,8 +538,8 @@ if __name__ == "__main__":
 
     final_accuracy_new_test = evaluate_model(
         new_test_loader,
-        ddpm_model=model,
-        cond_projector=condition_projector,
+        ddpm_model=model_to_use,
+        cond_projector=projector_to_use,
         scheduler=inference_scheduler,
         evaluator_obj=evaluator,
         epoch_num=CONFIG["num_epochs"],

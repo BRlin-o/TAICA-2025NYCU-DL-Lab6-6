@@ -50,6 +50,7 @@ class Config(dict):
             "condition_embed_dim": 128,
             "use_classifier_guidance": True,
             "guidance_scale": 2.0,
+            "ema_rate": 0.9999,          # EMA decay factor
             # ── hardware ──
             "device": "cuda" if torch.cuda.is_available() else "cpu",
         }
