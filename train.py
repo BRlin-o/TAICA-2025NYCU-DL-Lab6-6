@@ -208,7 +208,7 @@ def evaluate_model(
             ddpm_model, cond_projector, inference_scheduler, evaluator_obj,
             batch_labels, num_images_per_prompt=1,
             use_guidance=config["use_classifier_guidance"], guidance_scale=config["guidance_scale"],
-            device=config["device"], num_inference_steps=config["num_inference_steps"]
+            device=config["device"], num_inference_steps=inference_steps
         )
         all_generated_images.append(generated_batch.cpu())
     
@@ -331,17 +331,27 @@ def evaluate_model_with_labels(
     print(f"\n--- Evaluating model at epoch {epoch_num} ---")
     # Evaluate on test.json
     accuracy_test = evaluate_model(
-        "test.json",
-        model, condition_projector, noise_scheduler, evaluator_obj,
-        test_labels_one_hot_tensor, epoch_num, config
+        dataset_name="test.json",
+        ddpm_model=model, 
+        cond_projector=condition_projector, 
+        scheduler=noise_scheduler, 
+        evaluator_obj=evaluator_obj,
+        test_labels_one_hot_tensor=test_labels_one_hot_tensor, 
+        epoch_num=epoch_num, 
+        config=config
     )
     print(f"Epoch {epoch_num} - Accuracy on test.json: {accuracy_test:.4f}")
 
     # Evaluate on new_test.json
     accuracy_new_test = evaluate_model(
-        "new_test.json",
-        model, condition_projector, noise_scheduler, evaluator_obj,
-        new_test_labels_one_hot_tensor, epoch_num, config
+        dataset_name="new_test.json",
+        ddpm_model=model, 
+        cond_projector=condition_projector, 
+        scheduler=noise_scheduler, 
+        evaluator_obj=evaluator_obj,
+        test_labels_one_hot_tensor=new_test_labels_one_hot_tensor, 
+        epoch_num=epoch_num, 
+        config=config
     )
     print(f"Epoch {epoch_num} - Accuracy on new_test.json: {accuracy_new_test:.4f}")
     return accuracy_test, accuracy_new_test
@@ -454,8 +464,14 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
         # <<< Periodic Evaluation >>>
         if (epoch + 1) % config["eval_epochs"] == 0 or epoch == config["num_epochs"] - 1:
             current_eval_accuracy = evaluate_model(
-                model, condition_projector, inference_scheduler , evaluator_obj,
-                test_labels_eval_tensor, epoch + 1, config
+                dataset_name="test.json",
+                ddpm_model=model, 
+                cond_projector=condition_projector, 
+                scheduler=inference_scheduler , 
+                evaluator_obj=evaluator_obj,
+                test_labels_one_hot_tensor=test_labels_eval_tensor, 
+                epoch_num=epoch + 1, 
+                config=config
             )
             # 記錄評估指標到 wandb
             wandb.log({
@@ -516,7 +532,14 @@ if __name__ == "__main__":
     # --- 1. Prepare Dataset ---
     print("Preparing dataset...")
     train_dataset = ICLEVRDataset(CONFIG["train_json_path"], objects_map, CONFIG["images_base_path"], CONFIG["image_size"], mode="train")
-    train_dataloader = DataLoader(train_dataset, batch_size=CONFIG["train_batch_size"], shuffle=True, num_workers=4, pin_memory=True) # Added pin_memory
+    train_dataloader = DataLoader(
+        train_dataset, 
+        batch_size=CONFIG["train_batch_size"], 
+        shuffle=True, 
+        num_workers=4, 
+        pin_memory=True,# Added pin_memory
+        persistent_workers=True,
+    ) 
     
     # Test datasets (only labels)
     test_dataset_for_eval = ICLEVRDataset(CONFIG["test_json_path"], objects_map, "", CONFIG["image_size"], mode="test")
@@ -577,8 +600,14 @@ if __name__ == "__main__":
     test_labels_one_hot_tensor = torch.stack(test_labels_one_hot_list) # CPU tensor
 
     final_accuracy_test = evaluate_model(
-        model, condition_projector, inference_scheduler, 
-        evaluator, test_labels_one_hot_tensor, CONFIG["num_epochs"], CONFIG
+        dataset_name="test.json",
+        ddpm_model=model, 
+        cond_projector=condition_projector, 
+        scheduler=inference_scheduler, 
+        evaluator_obj=evaluator, 
+        test_labels_one_hot_tensor=test_labels_one_hot_tensor, 
+        epoch_num=CONFIG["num_epochs"], 
+        config=CONFIG
     ) # Pass full CONFIG
     print(f"Final Accuracy on test.json: {final_accuracy_test:.4f}")
     plt.figure(figsize=(3,1))
@@ -592,9 +621,15 @@ if __name__ == "__main__":
     new_test_labels_one_hot_list = [new_test_dataset[i] for i in range(len(new_test_dataset))]
     new_test_labels_one_hot_tensor = torch.stack(new_test_labels_one_hot_list) # CPU tensor
 
-    final_accuracy_new_test = evaluate_model(
-        model, condition_projector, inference_scheduler, evaluator,
-        new_test_labels_one_hot_tensor, CONFIG["num_epochs"], CONFIG
+    final_accuracy_new_test = evaluate_model( ## 
+        dataset_name="new_test.json",
+        ddpm_model=model, 
+        cond_projector=condition_projector, 
+        scheduler=inference_scheduler, 
+        evaluator_obj=evaluator,
+        test_labels_one_hot_tensor=new_test_labels_one_hot_tensor, 
+        epoch_num=CONFIG["num_epochs"], 
+        config=CONFIG
     ) # Pass full CONFIG
     print(f"Final Accuracy on new_test.json: {final_accuracy_new_test:.4f}")
     plt.figure(figsize=(3,1))
