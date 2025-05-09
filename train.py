@@ -98,6 +98,7 @@ def evaluate_model(
     epoch_num: int,
     config,
     save_individual_images: bool = False,   # save PNGs for each sample
+    use_wnadb=False,
 ):
     ddpm_model.eval()
     cond_projector.eval()
@@ -143,10 +144,11 @@ def evaluate_model(
     save_image(grid_eval, save_path)
     print(f"Saved epoch {epoch_num} evaluation grid to {save_path}")
 
-    wandb.log({
-        f"eval/{tag}_accuracy": accuracy,
-        "epoch": epoch_num
-    })
+    if use_wnadb:
+        wandb.log({
+            f"eval/{tag}_accuracy": accuracy,
+            "epoch": epoch_num
+        })
 
     return accuracy
 
@@ -345,7 +347,8 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
                 scheduler=inference_scheduler,
                 evaluator_obj=evaluator_obj,
                 epoch_num=epoch + 1,
-                config=config
+                config=config,
+                use_wnadb=True,
             )
             # 記錄評估指標到 wandb
             wandb.log({
@@ -429,7 +432,7 @@ if __name__ == "__main__":
 
 
     # --- 2. Train Model (or load if exists) ---
-    model_load_path = CONFIG["model_save_path"] # Default final model
+    model_load_path = CONFIG["best_model_save_path"] # Default final model
     
     if args.mode == "train":
         run = wandb.init(

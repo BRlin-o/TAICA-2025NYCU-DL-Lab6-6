@@ -40,6 +40,7 @@ class Config(dict):
             # ── paths ──
             "results_folder": "./results",
             "model_save_path": "./ddpm_conditional_iclevr.pth",
+            "best_model_save_path": "./best_model.pth",
             "images_base_path": "./iclevr/",
             "train_json_path": "./train.json",
             "test_json_path": "./test.json",
