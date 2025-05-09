@@ -7,18 +7,6 @@ from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 from diffusers import DDPMScheduler, DPMSolverMultistepScheduler
 
-def build_model_path(base_path: str, suffix: str) -> str:
-    """
-    Utility to insert a suffix **before** the file extension.
-
-    Example:
-        build_model_path("model.pth", "_best") -> "model_best.pth"
-    """
-    root, ext = os.path.splitext(base_path)
-    return f"{root}{suffix}{ext}"
-
-CONFIG = Config()
-
 class Config(dict):
     """
     統一設定物件：
@@ -87,6 +75,40 @@ class Config(dict):
         """便於 wandb.log(config.to_dict())"""
         return dict(self)
 
+CONFIG = Config()
+
+def build_model_path(base_path: str, suffix: str) -> str:
+    """
+    Utility to insert a suffix **before** the file extension.
+
+    Example:
+        build_model_path("model.pth", "_best") -> "model_best.pth"
+    """
+    root, ext = os.path.splitext(base_path)
+    return f"{root}{suffix}{ext}"
+
+def load_json(path):
+    with open(path, 'r') as f:
+        return json.load(f)
+
+def denormalize(tensor_images): # Convert from [-1, 1] to [0, 1]
+    return (tensor_images / 2.0) + 0.5
+
+def get_inference_scheduler(config):
+    """返回用於推理的採樣排程器"""
+    if config["inference_scheduler"] == "dpm_solver++":
+        return DPMSolverMultistepScheduler(
+            num_train_timesteps=config["num_train_timesteps"],
+            beta_schedule="squaredcos_cap_v2",
+            algorithm_type="dpmsolver++",  # 使用 dpmsolver++ 算法
+            solver_order=2,  # 可以是 1, 2 或 3，越高精度越好但計算量更大
+        )
+    else:  # 默認使用 DDPM
+        return DDPMScheduler(
+            num_train_timesteps=config["num_train_timesteps"],
+            beta_schedule="squaredcos_cap_v2"
+        )
+    
 class ICLEVRDataset(Dataset):
     def __init__(self, json_path, objects_map, images_base_path, image_size, mode="train"):
         self.data = load_json(json_path)
@@ -133,25 +155,3 @@ class ICLEVRDataset(Dataset):
             return image_tensor, label_one_hot
         else: # For test mode, only return the labels. Images will be generated.
             return label_one_hot
-
-def load_json(path):
-    with open(path, 'r') as f:
-        return json.load(f)
-
-def denormalize(tensor_images): # Convert from [-1, 1] to [0, 1]
-    return (tensor_images / 2.0) + 0.5
-
-def get_inference_scheduler(config):
-    """返回用於推理的採樣排程器"""
-    if config["inference_scheduler"] == "dpm_solver++":
-        return DPMSolverMultistepScheduler(
-            num_train_timesteps=config["num_train_timesteps"],
-            beta_schedule="squaredcos_cap_v2",
-            algorithm_type="dpmsolver++",  # 使用 dpmsolver++ 算法
-            solver_order=2,  # 可以是 1, 2 或 3，越高精度越好但計算量更大
-        )
-    else:  # 默認使用 DDPM
-        return DDPMScheduler(
-            num_train_timesteps=config["num_train_timesteps"],
-            beta_schedule="squaredcos_cap_v2"
-        )
