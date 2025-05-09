@@ -354,6 +354,17 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
     global_step = 0
     best_eval_accuracy = 0.0 # To save the best model based on eval
 
+    # 獲取用於推理的排程器
+    inference_scheduler = get_inference_scheduler(config)
+    
+    # 根據採樣器類型設置適當的步數
+    if isinstance(inference_scheduler, DPMSolverMultistepScheduler):
+        inference_steps = config["dpm_solver_steps"]  # DPM-Solver++ 使用較少步數
+        print(f"使用 DPM-Solver++ 生成訓練中的示例圖像，步數: {inference_steps}")
+    else:
+        inference_steps = config["num_inference_steps"]  # DDPM 使用標準步數
+        print(f"使用 DDPM 生成訓練中的示例圖像，步數: {inference_steps}")
+
     for epoch in range(config["num_epochs"]):
         model.train()
         condition_projector.train()
@@ -443,7 +454,7 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
         # <<< Periodic Evaluation >>>
         if (epoch + 1) % config["eval_epochs"] == 0 or epoch == config["num_epochs"] - 1:
             current_eval_accuracy = evaluate_model(
-                model, condition_projector, noise_scheduler, evaluator_obj,
+                model, condition_projector, inference_scheduler , evaluator_obj,
                 test_labels_eval_tensor, epoch + 1, config
             )
             # 記錄評估指標到 wandb
