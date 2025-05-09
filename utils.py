@@ -1,10 +1,11 @@
 import os
 import json
 from typing import Optional, Union
+from PIL import Image
 import torch
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
-from diffusers import UNet2DConditionModel, DDPMScheduler, DPMSolverMultistepScheduler
+from diffusers import DDPMScheduler, DPMSolverMultistepScheduler
 
 def build_model_path(base_path: str, suffix: str) -> str:
     """
@@ -15,6 +16,8 @@ def build_model_path(base_path: str, suffix: str) -> str:
     """
     root, ext = os.path.splitext(base_path)
     return f"{root}{suffix}{ext}"
+
+CONFIG = Config()
 
 class Config(dict):
     """
@@ -31,7 +34,7 @@ class Config(dict):
             "log_images_freq": 10,
             # ── data & training ──
             "image_size": 64,
-            "train_batch_size": 64,
+            "train_batch_size": 96,
             "eval_batch_size": 64,
             "num_epochs": 200,
             "lr": 1e-4,
@@ -47,7 +50,7 @@ class Config(dict):
             "save_model_epochs": 1, # 25
             "eval_epochs": 1, # 5
             # ── paths ──
-            "results_folder": "./results_lab6",
+            "results_folder": "./results",
             "model_save_path": "./ddpm_conditional_iclevr.pth",
             "images_base_path": "./iclevr/",
             "train_json_path": "./train.json",

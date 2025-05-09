@@ -93,18 +93,6 @@ CUDA_VISIBLE_DEVICES=0 python train.py
 CUDA_VISIBLE_DEVICES=0,1 python train.py
 ```
 
-### 8. 監控訓練（推薦）
-
-雖然當前代碼沒有直接使用TensorBoard，但建議添加TensorBoard支持來更好地監控訓練：
-
-```bash
-# 首先在代碼中添加TensorBoard支援
-# 然後運行TensorBoard服務
-tensorboard --logdir=./results_lab6/runs
-```
-
-這樣，您可以在瀏覽器中通過 `http://localhost:6006` 訪問訓練監控面板。
-
 ### 注意事項
 
 - 確保您的機器有足夠的GPU顯存（推薦至少8GB）
