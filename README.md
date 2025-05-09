@@ -12,7 +12,7 @@ python -m venv .venv
 # source .venv/bin/activate
 
 # 激活環境 (Windows)
-.venv\Scripts\activate
+.venv\Scripts\activate.bat
 ```
 
 ### 2. 安裝依賴
