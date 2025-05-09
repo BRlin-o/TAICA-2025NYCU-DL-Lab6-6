@@ -1,11 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.transforms as transforms
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from torchvision.utils import make_grid, save_image
 from PIL import Image
-import json
 import os
 import numpy as np
 from tqdm.auto import tqdm
@@ -18,85 +16,16 @@ from diffusers.optimization import get_cosine_schedule_with_warmup
 
 # Import the evaluator
 from evaluator import evaluation_model # Make sure evaluator.py is in the same directory or accessible
-from utils import build_model_path, Config
+from utils import build_model_path, load_json, denormalize, get_inference_scheduler
+from utils import Config, ICLEVRDataset
 
 CONFIG = Config()
 
-os.makedirs(CONFIG["results_folder"], exist_ok=True)
 device = torch.device(CONFIG["device"])
-
-def load_json(path):
-    with open(path, 'r') as f:
-        return json.load(f)
-
-def denormalize(tensor_images): # Convert from [-1, 1] to [0, 1]
-    return (tensor_images / 2.0) + 0.5
 
 objects_map = load_json(CONFIG["objects_json_path"])
 idx_to_object = {v: k for k, v in objects_map.items()}
 num_classes = len(objects_map)
-
-def get_inference_scheduler(config):
-    """返回用於推理的採樣排程器"""
-    if config["inference_scheduler"] == "dpm_solver++":
-        return DPMSolverMultistepScheduler(
-            num_train_timesteps=config["num_train_timesteps"],
-            beta_schedule="squaredcos_cap_v2",
-            algorithm_type="dpmsolver++",  # 使用 dpmsolver++ 算法
-            solver_order=2,  # 可以是 1, 2 或 3，越高精度越好但計算量更大
-        )
-    else:  # 默認使用 DDPM
-        return DDPMScheduler(
-            num_train_timesteps=config["num_train_timesteps"],
-            beta_schedule="squaredcos_cap_v2"
-        )
-
-class ICLEVRDataset(Dataset):
-    def __init__(self, json_path, objects_map, images_base_path, image_size, mode="train"):
-        self.data = load_json(json_path)
-        self.objects_map = objects_map
-        self.num_classes = len(objects_map)
-        self.images_base_path = images_base_path
-        self.mode = mode # "train", "test"
-        self.tag = mode  # keep a simple tag for later use
-
-        if self.mode == "train":
-            self.image_files = list(self.data.keys())
-            self.labels = list(self.data.values())
-        else: # "test" or "new_test"
-            self.labels = self.data
-            self.image_files = None
-
-        self.transform = transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.ToTensor(), # Scales to [0, 1]
-            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]) # Scales to [-1, 1]
-        ])
-
-    def __len__(self):
-        if self.mode == "train":
-            return len(self.image_files)
-        else:
-            return len(self.labels)
-
-    def __getitem__(self, idx):
-        labels_text = self.labels[idx]
-        label_one_hot = torch.zeros(self.num_classes, dtype=torch.float)
-        for obj_name in labels_text:
-            label_one_hot[self.objects_map[obj_name]] = 1.0
-
-        if self.mode == "train":
-            img_name = self.image_files[idx]
-            img_path = os.path.join(self.images_base_path, img_name)
-            try:
-                image = Image.open(img_path).convert("RGB")
-                image_tensor = self.transform(image)
-            except FileNotFoundError:
-                print(f"Warning: Image file not found {img_path}. Returning zeros.")
-                image_tensor = torch.zeros((3, CONFIG["image_size"], CONFIG["image_size"]))
-            return image_tensor, label_one_hot
-        else: # For test mode, only return the labels. Images will be generated.
-            return label_one_hot
 
 # --- Unified U-Net with Condition Projector ---
 class UNetConditionModel(nn.Module):
@@ -128,7 +57,6 @@ class UNetConditionModel(nn.Module):
     def forward(self, x: torch.Tensor, t: torch.Tensor, labels_one_hot: torch.Tensor):
         cond_embeds = self.projector(labels_one_hot).unsqueeze(1)
         return self.unet(x, t, encoder_hidden_states=cond_embeds).sample
-
 
 ### Unified model wrapper
 # Instantiate the unified model wrapper
