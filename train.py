@@ -18,6 +18,7 @@ from diffusers.optimization import get_cosine_schedule_with_warmup
 
 # Import the evaluator
 from evaluator import evaluation_model # Make sure evaluator.py is in the same directory or accessible
+from utils import build_model_path
 
 CONFIG = {
     "wandb_project": "conditional-ddpm-lab6-6",  # wandb 專案名稱
@@ -480,7 +481,7 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
                 best_eval_accuracy = current_eval_accuracy
                 wandb.log({"eval/best_eval_accuracy": best_eval_accuracy})
                 print(f"New best evaluation accuracy: {best_eval_accuracy:.4f}. Saving model.")
-                model_save_path = config["model_save_path"] + "_best_eval"
+                model_save_path = build_model_path(config["model_save_path"], "_best_eval")
                 torch.save({
                     'model_state_dict': model.state_dict(),
                     'condition_projector_state_dict': condition_projector.state_dict(),
@@ -492,7 +493,7 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
 
 
         if (epoch + 1) % config["save_model_epochs"] == 0 or epoch == config["num_epochs"] - 1:
-            model_path = config["model_save_path"] + f"_epoch{epoch+1}"
+            model_path = build_model_path(config["model_save_path"], f"_epoch{epoch+1}")
             torch.save({
                 'model_state_dict': model.state_dict(),
                 'condition_projector_state_dict': condition_projector.state_dict(),
