@@ -40,9 +40,9 @@ class Config(dict):
             # ── bookkeeping ──
             "gradient_accumulation_steps": 1,
             "log_interval": 50,
-            "save_image_epochs": 15,
-            "save_model_epochs": 25,
-            "eval_epochs": 5,
+            "save_image_epochs": 1, # 15
+            "save_model_epochs": 1, # 25
+            "eval_epochs": 1, # 5
             # ── paths ──
             "results_folder": "./results_lab6",
             "model_save_path": "./ddpm_conditional_iclevr.pth",
