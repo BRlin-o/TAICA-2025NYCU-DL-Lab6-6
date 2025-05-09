@@ -222,6 +222,18 @@ def generate_images(ddpm_model, cond_projector, scheduler, evaluator_obj,
     
     return images
 
+# ---------- Loss-weight utilities ----------
+def compute_p2_loss_weight(scheduler, timesteps, gamma: float = 5.0, device=None):
+    """
+    手動計算 P2 / SNR-based loss weighting。
+    公式同 diffusers >=0.34 的 `get_loss_weight()`：
+        w_t = (SNR_t + 1) / (SNR_t + gamma)
+    """
+    alphas_cumprod = scheduler.alphas_cumprod.to(device or timesteps.device)
+    alphas = alphas_cumprod[timesteps]          # ᾱ_t
+    snr = alphas / (1.0 - alphas)               # signal-to-noise ratio
+    return (snr + 1.0) / (snr + gamma)
+
 def train_loop(config, model, condition_projector, noise_scheduler, optimizer, lr_scheduler, train_dataloader,
                test_loader_eval, evaluator_obj):
     model.train()
@@ -265,7 +277,8 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
             # --- P2 loss with v‑prediction ---
             target = noise_scheduler.get_velocity(clean_images, noise, timesteps)
             loss = F.mse_loss(noise_pred, target, reduction="none")
-            loss = (loss * noise_scheduler.get_loss_weight(timesteps).view(-1, 1, 1, 1)).mean()
+            loss_weights = compute_p2_loss_weight(noise_scheduler, timesteps, gamma=5.0, device=device)
+            loss = (loss * loss_weights.view(-1, 1, 1, 1)).mean()
             
             loss.backward()
             
