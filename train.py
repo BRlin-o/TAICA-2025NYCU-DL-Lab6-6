@@ -10,6 +10,7 @@ import os
 import numpy as np
 from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
+import wandb  # 添加 wandb 導入
 
 # Diffusers specific imports
 from diffusers import UNet2DConditionModel, DDPMScheduler, DPMSolverMultistepScheduler
@@ -19,6 +20,9 @@ from diffusers.optimization import get_cosine_schedule_with_warmup
 from evaluator import evaluation_model # Make sure evaluator.py is in the same directory or accessible
 
 CONFIG = {
+    "wandb_project": "conditional-ddpm-lab6-6",  # wandb 專案名稱
+    "wandb_run_name": "ddpm-dpm-solver-run",  # 運行名稱
+    "log_images_freq": 10,  # 每隔多少個 epoch 記錄圖像
     "image_size": 64,
     "train_batch_size": 64,
     "eval_batch_size": 64,
@@ -217,6 +221,12 @@ def evaluate_model(
     grid_eval = make_grid(denormalize(all_generated_images_tensor), nrow=8)
     save_image(grid_eval, save_path)
     print(f"Saved epoch {epoch_num} evaluation grid to {save_path}")
+
+    wandb.log({
+        f"eval/{dataset_name}_samples": wandb.Image(grid_eval, caption=f"{dataset_name} - Epoch {epoch_num}"),
+        f"eval/{dataset_name}_accuracy": accuracy,
+        "epoch": epoch_num
+    })
     
     return accuracy
 
@@ -370,6 +380,13 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
             lr_scheduler.step()
             optimizer.zero_grad()
 
+            # 記錄訓練指標到 wandb
+            wandb.log({
+                "train/loss": loss.item(),
+                "train/lr": optimizer.param_groups[0]['lr'],
+                "global_step": global_step
+            })
+
             progress_bar.update(1)
             progress_bar.set_description(f"Epoch {epoch+1}/{config['num_epochs']} Step {step+1}/{len(train_dataloader)} Loss: {loss.item():.4f}")
             epoch_loss += loss.item()
@@ -378,10 +395,14 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
         avg_epoch_loss = epoch_loss / len(train_dataloader)
         print(f"Epoch {epoch+1} average loss: {avg_epoch_loss:.4f}")
 
+        # 記錄每個 epoch 的平均損失
+        wandb.log({"train/epoch_loss": avg_epoch_loss, "epoch": epoch})
+
         if (epoch + 1) % config["save_image_epochs"] == 0 or epoch == config["num_epochs"] - 1:
             model.eval() # Set to eval mode for generation
             condition_projector.eval()
             print("Generating sample images for visual inspection...")
+
             fixed_labels_text = [["red sphere", "cyan cylinder", "cyan cube"], ["yellow cube"], ["blue sphere", "green cylinder"]]
             fixed_labels_one_hot = []
             for l_text in fixed_labels_text:
@@ -398,30 +419,56 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
             )
             generated_images_denorm = denormalize(generated_images.cpu())
             grid = make_grid(generated_images_denorm, nrow=len(fixed_labels_text))
-            save_image(grid, os.path.join(config["results_folder"], f"epoch_{epoch+1}_samples.png"))
-            print(f"Saved sample images to {config['results_folder']}/epoch_{epoch+1}_samples.png")
+
+            save_path = os.path.join(config["results_folder"], f"epoch_{epoch+1}_samples.png")
+            save_image(grid, save_path)
+            print(f"Saved sample images to {save_path}")
+
+            # 記錄圖像到 wandb
+            wandb.log({
+                "generated_samples": wandb.Image(grid, caption=f"Epoch {epoch+1} Samples"),
+                "epoch": epoch
+            })
+
             model.train() # Set back to train mode
             condition_projector.train()
 
 
         # <<< Periodic Evaluation >>>
         if (epoch + 1) % config["eval_epochs"] == 0 or epoch == config["num_epochs"] - 1:
-            current_eval_accuracy = evaluate_model(model, condition_projector, noise_scheduler, evaluator_obj,
-                                      test_labels_eval_tensor, epoch + 1, config)
+            test_accuracy, new_test_accuracy = evaluate_model_with_labels(
+                model, condition_projector, noise_scheduler, evaluator_obj,
+                test_labels_one_hot_tensor, new_test_labels_one_hot_tensor,
+                epoch + 1, config
+            )
+            # 記錄評估指標到 wandb
+            wandb.log({
+                "eval/test_accuracy": test_accuracy,
+                "eval/new_test_accuracy": new_test_accuracy,
+                "epoch": epoch
+            })
+            test_grid_path = os.path.join(config["results_folder"], f"epoch_{epoch+1}_eval_test.json_samples.png")
+
+            # current_eval_accuracy = (test_accuracy + new_test_accuracy) / 2.0
+            current_eval_accuracy = test_accuracy
+
             if current_eval_accuracy > best_eval_accuracy:
                 best_eval_accuracy = current_eval_accuracy
+                wandb.log({"eval/best_eval_accuracy": best_eval_accuracy})
                 print(f"New best evaluation accuracy: {best_eval_accuracy:.4f}. Saving model.")
+                model_save_path = config["model_save_path"] + "_best_eval"
                 torch.save({
                     'model_state_dict': model.state_dict(),
                     'condition_projector_state_dict': condition_projector.state_dict(),
                     'epoch': epoch,
                     'accuracy': best_eval_accuracy
-                }, config["model_save_path"] + "_best_eval")
+                }, model_save_path)
             model.train() # Ensure model is back in train mode after evaluation
             condition_projector.train()
 
 
         if (epoch + 1) % config["save_model_epochs"] == 0 or epoch == config["num_epochs"] - 1:
+            model_path = config["model_save_path"] + f"_epoch{epoch+1}"
             torch.save({
                 'model_state_dict': model.state_dict(),
                 'condition_projector_state_dict': condition_projector.state_dict(),
@@ -429,19 +476,33 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
                 'lr_scheduler_state_dict': lr_scheduler.state_dict(),
                 'epoch': epoch,
                 'global_step': global_step
-            }, config["model_save_path"] + f"_epoch{epoch+1}")
+            }, model_path)
             print(f"Saved model checkpoint at epoch {epoch+1}")
     
     progress_bar.close()
+    final_model_path = config["model_save_path"]
     torch.save({
         'model_state_dict': model.state_dict(),
         'condition_projector_state_dict': condition_projector.state_dict(),
-    }, config["model_save_path"])
+    }, final_model_path)
     print(f"Training finished. Saved final model to {config['model_save_path']}")
+
+    wandb.run.summary.update({
+        "best_eval_accuracy": best_eval_accuracy,
+        "total_epochs": config["num_epochs"],
+        "final_epoch_loss": avg_epoch_loss
+    })
 
 
 # --- Main Execution ---
 if __name__ == "__main__":
+    run = wandb.init(
+        project=CONFIG["wandb_project"],
+        entity=CONFIG["wandb_entity"],
+        name=CONFIG["wandb_run_name"],
+        config=CONFIG,  # 自動記錄所有配置
+        save_code=True  # 保存代碼版本
+    )
     # --- 1. Prepare Dataset ---
     print("Preparing dataset...")
     train_dataset = ICLEVRDataset(CONFIG["train_json_path"], objects_map, CONFIG["images_base_path"], CONFIG["image_size"], mode="train")
@@ -532,6 +593,14 @@ if __name__ == "__main__":
     plt.savefig(os.path.join(CONFIG["results_folder"], "accuracy_final_new_test_json.png"))
     # plt.show()
 
+    wandb.run.summary.update({
+        "final_test_accuracy": final_accuracy_test,
+        "final_new_test_accuracy": final_accuracy_new_test,
+        "dpm_solver_steps": CONFIG["dpm_solver_steps"] if CONFIG["inference_scheduler"] == "dpm_solver++" else None,
+        "num_inference_steps": CONFIG["num_inference_steps"],
+        "guidance_scale": CONFIG["guidance_scale"]
+    })
+
     # --- 4. Show Denoising Process ---
     # (This part remains the same, ensure model is in eval mode if not already)
     model.eval()
@@ -559,3 +628,4 @@ if __name__ == "__main__":
     print(f"Saved denoising process grid to {CONFIG['results_folder']}/denoising_process.png")
 
     print("\nLab 6 execution finished.")
+    wandb.finish()
