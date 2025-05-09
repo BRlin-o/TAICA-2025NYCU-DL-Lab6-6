@@ -351,7 +351,6 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
                test_labels_eval_tensor, evaluator_obj): # <<< Added test_labels_eval_tensor and evaluator_obj
     model.train()
     condition_projector.train()
-    progress_bar = tqdm(total=config["num_epochs"] * len(train_dataloader))
     global_step = 0
     best_eval_accuracy = 0.0 # To save the best model based on eval
 
@@ -359,6 +358,10 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
         model.train()
         condition_projector.train()
         epoch_loss = 0.0
+
+        # 每個 epoch 重設進度條
+        progress_bar = tqdm(total=len(train_dataloader), desc=f"Epoch {epoch+1}/{config['num_epochs']}")
+
         for step, batch in enumerate(train_dataloader):
             clean_images, labels_one_hot = batch
             clean_images = clean_images.to(device)
@@ -388,10 +391,13 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
             })
 
             progress_bar.update(1)
-            progress_bar.set_description(f"Epoch {epoch+1}/{config['num_epochs']} Step {step+1}/{len(train_dataloader)} Loss: {loss.item():.4f}")
+            progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
             epoch_loss += loss.item()
             global_step +=1
 
+        # 關閉當前 epoch 的進度條
+        progress_bar.close()
+        
         avg_epoch_loss = epoch_loss / len(train_dataloader)
         print(f"Epoch {epoch+1} average loss: {avg_epoch_loss:.4f}")
 
