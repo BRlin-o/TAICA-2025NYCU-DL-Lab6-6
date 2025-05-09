@@ -18,39 +18,9 @@ from diffusers.optimization import get_cosine_schedule_with_warmup
 
 # Import the evaluator
 from evaluator import evaluation_model # Make sure evaluator.py is in the same directory or accessible
-from utils import build_model_path
+from utils import build_model_path, Config
 
-CONFIG = {
-    "wandb_project": "conditional-ddpm-lab6-6",  # wandb 專案名稱
-    "wandb_run_name": "ddpm-dpm-solver-run",  # 運行名稱
-    "log_images_freq": 10,  # 每隔多少個 epoch 記錄圖像
-    "image_size": 64,
-    "train_batch_size": 48,
-    "eval_batch_size": 48,
-    "num_epochs": 200,
-    "lr": 1e-4,
-    "num_train_timesteps": 1000,
-    "num_inference_steps": 50,
-    "inference_scheduler": "ddpm",  # 可選: "ddpm", "dpm_solver++"
-    "dpm_solver_steps": 20,  # DPM-Solver++ 只需要較少的步數
-    "gradient_accumulation_steps": 1,
-    "log_interval": 50,
-    "save_image_epochs": 20,
-    "save_model_epochs": 50,
-    "eval_epochs": 10, 
-    "results_folder": "./results_lab6",
-    "model_save_path": "./ddpm_conditional_iclevr.pth",
-    "condition_embed_dim": 128,
-    "use_classifier_guidance": True,
-    "guidance_scale": 2.0,
-    "device": "cuda" if torch.cuda.is_available() else "cpu",
-    "train_json_path": "./train.json",
-    "test_json_path": "./test.json",
-    "new_test_json_path": "./new_test.json",
-    "objects_json_path": "./objects.json",
-    "images_base_path": "./iclevr/",
-    "evaluator_ckpt_path": "./checkpoint.pth"
-}
+CONFIG = Config()
 
 os.makedirs(CONFIG["results_folder"], exist_ok=True)
 device = torch.device(CONFIG["device"])
@@ -99,7 +69,7 @@ class ICLEVRDataset(Dataset):
         self.transform = transforms.Compose([
             transforms.Resize((image_size, image_size)),
             transforms.ToTensor(), # Scales to [0, 1]
-            transforms.Normalize([0.5], [0.5]) # Scales to [-1, 1]
+            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]) # Scales to [-1, 1]
         ])
 
     def __len__(self):
@@ -127,33 +97,44 @@ class ICLEVRDataset(Dataset):
         else: # For test mode, only return the labels. Images will be generated.
             return label_one_hot
 
-model = UNet2DConditionModel(
-    sample_size=CONFIG["image_size"],
-    in_channels=3,
-    out_channels=3,
-    layers_per_block=2,
-    block_out_channels=(128, 128, 256, 256, 512, 512), # Standard U-Net architecture
-    down_block_types=(
-        "DownBlock2D",
-        "DownBlock2D",
-        "DownBlock2D",
-        "DownBlock2D",
-        "CrossAttnDownBlock2D", # Add CrossAttention for conditioning
-        "CrossAttnDownBlock2D",
-    ),
-    up_block_types=(
-        "CrossAttnUpBlock2D", # Add CrossAttention for conditioning
-        "CrossAttnUpBlock2D",
-        "UpBlock2D",
-        "UpBlock2D",
-        "UpBlock2D",
-        "UpBlock2D",
-    ),
-    cross_attention_dim=CONFIG["condition_embed_dim"], # Dimension of condition embedding
-).to(device)
+# --- Unified U-Net with Condition Projector ---
+class UNetConditionModel(nn.Module):
+    """
+    Combines the conditional U‑Net and its label‑projection layer into a reusable
+    module.  The rest of the pipeline can interact with just this class.
+    """
+    def __init__(self, num_classes: int, config):
+        super().__init__()
+        self.unet = UNet2DConditionModel(
+            sample_size=config["image_size"],
+            in_channels=3,
+            out_channels=3,
+            layers_per_block=2,
+            block_out_channels=(128, 128, 256, 256, 512, 512),
+            down_block_types=(
+                "DownBlock2D", "DownBlock2D", "DownBlock2D", "DownBlock2D",
+                "CrossAttnDownBlock2D", "CrossAttnDownBlock2D",
+            ),
+            up_block_types=(
+                "CrossAttnUpBlock2D", "CrossAttnUpBlock2D",
+                "UpBlock2D", "UpBlock2D", "UpBlock2D", "UpBlock2D",
+            ),
+            cross_attention_dim=config["condition_embed_dim"],
+        )
+        # Label‑projection layer
+        self.projector = nn.Linear(num_classes, config["condition_embed_dim"])
 
-# Condition Projection Layer
-condition_projector = nn.Linear(num_classes, CONFIG["condition_embed_dim"]).to(device)
+    def forward(self, x: torch.Tensor, t: torch.Tensor, labels_one_hot: torch.Tensor):
+        cond_embeds = self.projector(labels_one_hot).unsqueeze(1)
+        return self.unet(x, t, encoder_hidden_states=cond_embeds).sample
+
+
+### Unified model wrapper
+# Instantiate the unified model wrapper
+model_wrapper = UNetConditionModel(num_classes, CONFIG).to(device)
+# Keep the original variable names for minimal downstream change
+model = model_wrapper.unet
+condition_projector = model_wrapper.projector
 
 # Noise Scheduler (from diffusers)
 noise_scheduler = DDPMScheduler(
