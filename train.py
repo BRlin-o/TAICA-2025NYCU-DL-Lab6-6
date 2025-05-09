@@ -9,7 +9,6 @@ import numpy as np
 from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 import wandb  # 添加 wandb 導入
-
 # Diffusers specific imports
 from diffusers import UNet2DConditionModel, DDPMScheduler, DPMSolverMultistepScheduler
 from diffusers.optimization import get_cosine_schedule_with_warmup
@@ -68,8 +67,8 @@ condition_projector = model_wrapper.projector
 # Noise Scheduler (from diffusers)
 noise_scheduler = DDPMScheduler(
     num_train_timesteps=CONFIG["num_train_timesteps"],
-    beta_schedule='squaredcos_cap_v2' # Often gives good results
-    # beta_schedule='linear' # Simpler alternative
+    beta_schedule="squaredcos_cap_v2",
+    prediction_type="v_prediction",        # use v‑prediction (Karras 2022)
 )
 
 # Optimizer
@@ -189,44 +188,25 @@ def generate_images(ddpm_model, cond_projector, scheduler, evaluator_obj,
 
         if use_guidance:
             with torch.enable_grad():
-                if is_dpm_solver:
-                    # DPM-Solver++ 對應的預測原始圖像方法
-                    # 需要按照 DPM-Solver++ 的方式計算，這是一個近似
-                    alpha_t = scheduler.alphas_cumprod[t]
-                    x0_pred = (model_input - (1 - alpha_t).sqrt() * noise_pred) / alpha_t.sqrt()
-                else:
-                    # DDPM 的預測方式
-                    alpha_prod_t = scheduler.alphas_cumprod[t]
-                    x0_pred = (model_input - (1 - alpha_prod_t).sqrt() * noise_pred) / alpha_prod_t.sqrt()
+                alpha_cumprod_t = scheduler.alphas_cumprod[t]
+                sigma_t = (1 - alpha_cumprod_t).sqrt()
 
+                if scheduler.config.prediction_type == "v_prediction":
+                    # x₀ = α · x_t − σ · v̂
+                    alpha_t = alpha_cumprod_t.sqrt()
+                    x0_pred = alpha_t * model_input - sigma_t * noise_pred
+                else:
+                    # x₀ = (x_t − σ · ε̂) / α
+                    x0_pred = (model_input - sigma_t * noise_pred) / alpha_cumprod_t.sqrt()
 
                 x0_pred_grad = x0_pred.detach().requires_grad_(True)
-
-                # 2. Get guidance gradient from classifier
-                # Evaluator expects normalized images in [-1, 1], which x0_pred should be.
-                logits = evaluator_obj.resnet18(x0_pred_grad) # Use the resnet18 directly
-                
-                # Calculate log probability of target labels
-                # For multi-label, BCE loss is common. We want to maximize log P(y|x).
-                # So, we can use sum of log-sigmoid for present classes.
-                log_probs = F.logsigmoid(logits) # (batch_size, num_classes)
-                
-                # We want to increase the probability of the true labels
-                # eff_target_labels_one_hot is (batch_size, num_classes)
-                selected_log_probs = (eff_target_labels_one_hot * log_probs).sum() # Sum over classes and batch
-
+                logits = evaluator_obj.resnet18(x0_pred_grad)
+                log_probs = F.logsigmoid(logits)
+                selected_log_probs = (eff_target_labels_one_hot * log_probs).sum()
                 grad = torch.autograd.grad(selected_log_probs, x0_pred_grad)[0]
 
-            # 3. Adjust noise prediction
-            # grad is d(logP)/dx0. We need to map this to d(logP)/d_epsilon
-            if is_dpm_solver:
-                # DPM-Solver++ 的引導方式稍有不同
-                alpha_t = scheduler.alphas_cumprod[t]
-                noise_pred = noise_pred - (1 - alpha_t).sqrt() * guidance_scale * grad
-            else:
-                # DDPM 的引導方式
-                alpha_prod_t = scheduler.alphas_cumprod[t]
-                noise_pred = noise_pred - (1 - alpha_prod_t).sqrt() * guidance_scale * grad
+            # Map ∂L/∂x₀ to ∂L/∂prediction  (both ε‑ and v‑pred: factor is σ_t)
+            noise_pred = noise_pred - sigma_t * guidance_scale * grad
 
         # Compute previous image: x_t -> x_t-1
         images = scheduler.step(noise_pred, t, images).prev_sample
@@ -281,7 +261,11 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
             condition_embeds = condition_projector(labels_one_hot)
             condition_embeds_unet = condition_embeds.unsqueeze(1)
             noise_pred = model(noisy_images, timesteps, encoder_hidden_states=condition_embeds_unet).sample
-            loss = F.mse_loss(noise_pred, noise)
+
+            # --- P2 loss with v‑prediction ---
+            target = noise_scheduler.get_velocity(clean_images, noise, timesteps)
+            loss = F.mse_loss(noise_pred, target, reduction="none")
+            loss = (loss * noise_scheduler.get_loss_weight(timesteps).view(-1, 1, 1, 1)).mean()
             
             loss.backward()
             
@@ -503,11 +487,6 @@ if __name__ == "__main__":
         save_individual_images=True
     )
     print(f"Final Accuracy on test.json: {final_accuracy_test:.4f}")
-    plt.figure(figsize=(3,1))
-    plt.text(0.5, 0.5, f"Final test.json Accuracy: {final_accuracy_test:.4f}", ha='center', va='center', fontsize=12)
-    plt.axis('off')
-    plt.savefig(os.path.join(CONFIG["results_folder"], "accuracy_final_test_json.png"))
-    # plt.show() # Can be blocking
 
     # New_test.json evaluation
     new_test_dataset = ICLEVRDataset(CONFIG["new_test_json_path"], objects_map, "", CONFIG["image_size"], mode="new_test")
@@ -530,11 +509,6 @@ if __name__ == "__main__":
         save_individual_images=True
     )
     print(f"Final Accuracy on new_test.json: {final_accuracy_new_test:.4f}")
-    plt.figure(figsize=(3,1))
-    plt.text(0.5, 0.5, f"Final new_test.json Accuracy: {final_accuracy_new_test:.4f}", ha='center', va='center', fontsize=12)
-    plt.axis('off')
-    plt.savefig(os.path.join(CONFIG["results_folder"], "accuracy_final_new_test_json.png"))
-    # plt.show()
 
     # --- 4. Show Denoising Process ---
     # (This part remains the same, ensure model is in eval mode if not already)

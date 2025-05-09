@@ -100,13 +100,15 @@ def get_inference_scheduler(config):
         return DPMSolverMultistepScheduler(
             num_train_timesteps=config["num_train_timesteps"],
             beta_schedule="squaredcos_cap_v2",
-            algorithm_type="dpmsolver++",  # 使用 dpmsolver++ 算法
-            solver_order=2,  # 可以是 1, 2 或 3，越高精度越好但計算量更大
+            algorithm_type="dpmsolver++",
+            solver_order=2,
+            prediction_type="v_prediction",
         )
     else:  # 默認使用 DDPM
         return DDPMScheduler(
             num_train_timesteps=config["num_train_timesteps"],
-            beta_schedule="squaredcos_cap_v2"
+            beta_schedule="squaredcos_cap_v2",
+            prediction_type="v_prediction",
         )
     
 class ICLEVRDataset(Dataset):
