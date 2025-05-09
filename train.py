@@ -24,8 +24,8 @@ CONFIG = {
     "wandb_run_name": "ddpm-dpm-solver-run",  # 運行名稱
     "log_images_freq": 10,  # 每隔多少個 epoch 記錄圖像
     "image_size": 64,
-    "train_batch_size": 48,
-    "eval_batch_size": 48,
+    "train_batch_size": 64,
+    "eval_batch_size": 64,
     "num_epochs": 200,
     "lr": 1e-4,
     "num_train_timesteps": 1000,
@@ -34,9 +34,9 @@ CONFIG = {
     "dpm_solver_steps": 20,  # DPM-Solver++ 只需要較少的步數
     "gradient_accumulation_steps": 1,
     "log_interval": 50,
-    "save_image_epochs": 20,
-    "save_model_epochs": 50,
-    "eval_epochs": 10, 
+    "save_image_epochs": 10,
+    "save_model_epochs": 25,
+    "eval_epochs": 5, 
     "results_folder": "./results_lab6",
     "model_save_path": "./ddpm_conditional_iclevr.pth",
     "condition_embed_dim": 128,
