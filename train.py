@@ -513,6 +513,7 @@ if __name__ == "__main__":
         config=CONFIG,
         save_individual_images=True
     )
+    print(f"Final Accuracy on new_test.json: {final_accuracy_new_test:.4f}")
 
     # --- 4. Show Denoising Process ---
     model.eval()
@@ -535,7 +536,7 @@ if __name__ == "__main__":
     if denoising_steps_images.shape[0] < 8 :
         print(f"Warning: Denoising process captured only {denoising_steps_images.shape[0]} images. Will display all.")
     
-    grid_denoising = make_grid(denormalize(denoising_steps_images), nrow=denoising_steps_images.shape[0])
+    grid_denoising = make_grid(denormalize(denoising_steps_images), nrow=denoising_steps_images.shape[0]//2)
     os.makedirs("images", exist_ok=True)
     save_image(grid_denoising, os.path.join("images", "denoising_process.png"))
     print(f"Saved denoising process grid to images/denoising_process.png")

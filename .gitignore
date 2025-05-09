@@ -12,3 +12,5 @@ iclevr/*.png
 output/*.log
 output/*/
 wandb/
+
+*.pth
