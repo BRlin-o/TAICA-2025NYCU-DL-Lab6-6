@@ -1,0 +1,13 @@
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.7.0+cu126
+torchvision==0.22.0+cu126
+diffusers>=0.14.0
+transformers>=4.25.1
+numpy>=1.21.0
+Pillow>=9.0.0
+matplotlib>=3.5.0
+tqdm>=4.64.0
+scipy>=1.7.0
+tensorboard>=2.10.0
+nvidia-cuda-runtime-cu12>=11.7.99
+nvidia-cudnn-cu12>=8.5.0.96
