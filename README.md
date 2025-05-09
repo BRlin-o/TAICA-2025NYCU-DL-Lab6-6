@@ -28,17 +28,23 @@ pip install -r requirements.txt
 
 ```
 project_folder/
+├── main.py                   # 程式入口點，處理命令行參數
 ├── train.py               # 您的主程式碼
+├── configs/                  # 配置文件目錄
+│   └── iclevr_v1.json        # 默認配置文件
 ├── evaluator.py           # 提供的評估器
 ├── checkpoint.pth         # 評估器權重
 ├── train.json             # 訓練資料標籤
 ├── test.json              # 測試資料標籤
 ├── new_test.json          # 新測試資料標籤
 ├── objects.json           # 物件字典檔
-└── iclevr/                # 圖像資料夾
-    ├── CLEVR_train_001032_0.png
-    ├── CLEVR_train_001032_1.png
-    └── ...
+├── iclevr/                # 圖像資料夾
+│    ├── CLEVR_train_001032_0.png
+│    ├── CLEVR_train_001032_1.png
+│    └── ...
+└── images/                   # 最終生成的測試圖像
+    ├── test/                 # test.json 的生成圖像
+    └── new_test/             # new_test.json 的生成圖像
 ```
 
 ### 4. 執行訓練

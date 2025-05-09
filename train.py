@@ -24,8 +24,8 @@ CONFIG = {
     "wandb_run_name": "ddpm-dpm-solver-run",  # 運行名稱
     "log_images_freq": 10,  # 每隔多少個 epoch 記錄圖像
     "image_size": 64,
-    "train_batch_size": 48,
-    "eval_batch_size": 48,
+    "train_batch_size": 64,
+    "eval_batch_size": 64,
     "num_epochs": 200,
     "lr": 1e-4,
     "num_train_timesteps": 1000,
@@ -34,9 +34,9 @@ CONFIG = {
     "dpm_solver_steps": 20,  # DPM-Solver++ 只需要較少的步數
     "gradient_accumulation_steps": 1,
     "log_interval": 50,
-    "save_image_epochs": 20,
-    "save_model_epochs": 50,
-    "eval_epochs": 10, 
+    "save_image_epochs": 1,
+    "save_model_epochs": 1,
+    "eval_epochs": 1, 
     "results_folder": "./results_lab6",
     "model_save_path": "./ddpm_conditional_iclevr.pth",
     "condition_embed_dim": 128,
@@ -126,58 +126,42 @@ class ICLEVRDataset(Dataset):
         else: # For test mode, only return the labels. Images will be generated.
             return label_one_hot
 
-model = UNet2DConditionModel(
-    sample_size=CONFIG["image_size"],
-    in_channels=3,
-    out_channels=3,
-    layers_per_block=2,
-    block_out_channels=(128, 128, 256, 256, 512, 512), # Standard U-Net architecture
-    down_block_types=(
-        "DownBlock2D",
-        "DownBlock2D",
-        "DownBlock2D",
-        "DownBlock2D",
-        "CrossAttnDownBlock2D", # Add CrossAttention for conditioning
-        "CrossAttnDownBlock2D",
-    ),
-    up_block_types=(
-        "CrossAttnUpBlock2D", # Add CrossAttention for conditioning
-        "CrossAttnUpBlock2D",
-        "UpBlock2D",
-        "UpBlock2D",
-        "UpBlock2D",
-        "UpBlock2D",
-    ),
-    cross_attention_dim=CONFIG["condition_embed_dim"], # Dimension of condition embedding
-).to(device)
-
-# Condition Projection Layer
-condition_projector = nn.Linear(num_classes, CONFIG["condition_embed_dim"]).to(device)
-
-# Noise Scheduler (from diffusers)
-noise_scheduler = DDPMScheduler(
-    num_train_timesteps=CONFIG["num_train_timesteps"],
-    beta_schedule='squaredcos_cap_v2' # Often gives good results
-    # beta_schedule='linear' # Simpler alternative
-)
-
-# Optimizer
-optimizer = torch.optim.AdamW(
-    list(model.parameters()) + list(condition_projector.parameters()),
-    lr=CONFIG["lr"]
-)
-
-# LR Scheduler
-lr_scheduler = get_cosine_schedule_with_warmup(
-    optimizer=optimizer,
-    num_warmup_steps=500,
-    num_training_steps=(len(ICLEVRDataset(CONFIG["train_json_path"], objects_map, CONFIG["images_base_path"], CONFIG["image_size"])) // CONFIG["train_batch_size"] * CONFIG["num_epochs"]),
-)
-
-original_evaluator_ckpt_path = './checkpoint.pth' # Path used inside evaluator.py
-evaluator = evaluation_model()
-evaluator.resnet18.to(device) # Move evaluator's model to device for guidance
-evaluator.resnet18.eval() # Set to eval mode
+def create_model(config, device):
+    """創建模型和條件投影層"""
+    # 加載對象映射
+    objects_map = load_json(config["objects_json_path"])
+    num_classes = len(objects_map)
+    
+    # 初始化 UNet 模型
+    model = UNet2DConditionModel(
+        sample_size=config["image_size"],
+        in_channels=3,
+        out_channels=3,
+        layers_per_block=2,
+        block_out_channels=(128, 128, 256, 256, 512, 512),
+        down_block_types=(
+            "DownBlock2D",
+            "DownBlock2D",
+            "DownBlock2D",
+            "DownBlock2D",
+            "CrossAttnDownBlock2D",
+            "CrossAttnDownBlock2D",
+        ),
+        up_block_types=(
+            "CrossAttnUpBlock2D",
+            "CrossAttnUpBlock2D",
+            "UpBlock2D",
+            "UpBlock2D",
+            "UpBlock2D",
+            "UpBlock2D",
+        ),
+        cross_attention_dim=config["condition_embed_dim"],
+    ).to(device)
+    
+    # 條件投影層
+    condition_projector = nn.Linear(num_classes, config["condition_embed_dim"]).to(device)
+    
+    return model, condition_projector, num_classes
 
 @torch.no_grad()
 def evaluate_model(
