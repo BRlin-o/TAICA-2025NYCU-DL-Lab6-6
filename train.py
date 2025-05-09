@@ -498,7 +498,6 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
 if __name__ == "__main__":
     run = wandb.init(
         project=CONFIG["wandb_project"],
-        entity=CONFIG["wandb_entity"],
         name=CONFIG["wandb_run_name"],
         config=CONFIG,  # 自動記錄所有配置
         save_code=True  # 保存代碼版本
