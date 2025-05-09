@@ -24,13 +24,13 @@ CONFIG = {
     "wandb_run_name": "ddpm-dpm-solver-run",  # 運行名稱
     "log_images_freq": 10,  # 每隔多少個 epoch 記錄圖像
     "image_size": 64,
-    "train_batch_size": 64,
-    "eval_batch_size": 64,
+    "train_batch_size": 48,
+    "eval_batch_size": 48,
     "num_epochs": 200,
     "lr": 1e-4,
     "num_train_timesteps": 1000,
     "num_inference_steps": 50,
-    "inference_scheduler": "dpm_solver++",  # 可選: "ddpm", "dpm_solver++"
+    "inference_scheduler": "ddpm",  # 可選: "ddpm", "dpm_solver++"
     "dpm_solver_steps": 20,  # DPM-Solver++ 只需要較少的步數
     "gradient_accumulation_steps": 1,
     "log_interval": 50,
@@ -188,12 +188,9 @@ def evaluate_model(
 ):
     ddpm_model.eval()
     cond_projector.eval()
-
-    # 獲取推理排程器
-    inference_scheduler = get_inference_scheduler(config)
     
     # 根據採樣器類型設置適當的步數
-    if isinstance(inference_scheduler, DPMSolverMultistepScheduler):
+    if isinstance(scheduler, DPMSolverMultistepScheduler):
         inference_steps = config["dpm_solver_steps"]  # DPM-Solver++ 使用較少步數
     else:
         inference_steps = config["num_inference_steps"]  # DDPM 使用標準步數
@@ -205,7 +202,7 @@ def evaluate_model(
     for batch_labels in tqdm(eval_labels_dataloader, desc=f"Generating for eval epoch {epoch_num}"):
         batch_labels = batch_labels.to(config["device"]) # Ensure labels are on the correct device
         generated_batch = generate_images(
-            ddpm_model, cond_projector, inference_scheduler, evaluator_obj,
+            ddpm_model, cond_projector, scheduler, evaluator_obj,
             batch_labels, num_images_per_prompt=1,
             use_guidance=config["use_classifier_guidance"], guidance_scale=config["guidance_scale"],
             device=config["device"], num_inference_steps=inference_steps
