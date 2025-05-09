@@ -442,21 +442,15 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
 
         # <<< Periodic Evaluation >>>
         if (epoch + 1) % config["eval_epochs"] == 0 or epoch == config["num_epochs"] - 1:
-            test_accuracy, new_test_accuracy = evaluate_model_with_labels(
+            current_eval_accuracy = evaluate_model(
                 model, condition_projector, noise_scheduler, evaluator_obj,
-                test_labels_one_hot_tensor, new_test_labels_one_hot_tensor,
-                epoch + 1, config
+                test_labels_eval_tensor, epoch + 1, config
             )
             # 記錄評估指標到 wandb
             wandb.log({
-                "eval/test_accuracy": test_accuracy,
-                "eval/new_test_accuracy": new_test_accuracy,
+                "eval/eval_accuracy": current_eval_accuracy,
                 "epoch": epoch
             })
-            test_grid_path = os.path.join(config["results_folder"], f"epoch_{epoch+1}_eval_test.json_samples.png")
-
-            # current_eval_accuracy = (test_accuracy + new_test_accuracy) / 2.0
-            current_eval_accuracy = test_accuracy
 
             if current_eval_accuracy > best_eval_accuracy:
                 best_eval_accuracy = current_eval_accuracy
