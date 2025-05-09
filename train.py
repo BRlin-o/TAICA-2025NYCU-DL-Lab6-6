@@ -84,10 +84,9 @@ lr_scheduler = get_cosine_schedule_with_warmup(
     num_training_steps=(len(ICLEVRDataset(CONFIG["train_json_path"], objects_map, CONFIG["images_base_path"], CONFIG["image_size"])) // CONFIG["train_batch_size"] * CONFIG["num_epochs"]),
 )
 
-original_evaluator_ckpt_path = './checkpoint.pth' # Path used inside evaluator.py
 evaluator = evaluation_model()
 evaluator.resnet18.to(device) # Move evaluator's model to device for guidance
-evaluator.resnet18.eval() # Set to eval mode
+evaluator.resnet18.eval()
 
 @torch.no_grad()
 def evaluate_model(
@@ -98,7 +97,7 @@ def evaluate_model(
     evaluator_obj: evaluation_model,
     epoch_num: int,
     config,
-    save_individual_images: bool = False,   # NEW ▸ save PNGs for each sample
+    save_individual_images: bool = False,   # save PNGs for each sample
 ):
     ddpm_model.eval()
     cond_projector.eval()
