@@ -165,9 +165,13 @@ evaluator.resnet18.eval() # Set to eval mode
 @torch.no_grad()
 def evaluate_model(
     dataloader: DataLoader,
-    ddpm_model: UNet2DConditionModel, cond_projector: nn.Linear,
-    scheduler: DDPMScheduler, evaluator_obj: evaluation_model,
-    epoch_num: int, config
+    ddpm_model: UNet2DConditionModel,
+    cond_projector: nn.Linear,
+    scheduler: DDPMScheduler,
+    evaluator_obj: evaluation_model,
+    epoch_num: int,
+    config,
+    save_individual_images: bool = False,   # NEW ▸ save PNGs for each sample
 ):
     ddpm_model.eval()
     cond_projector.eval()
@@ -181,6 +185,11 @@ def evaluate_model(
 
     all_generated_images = []
     all_labels = []
+    # ── optional per‑sample saving ──
+    if save_individual_images:
+        img_save_dir = os.path.join("images", tag)
+        os.makedirs(img_save_dir, exist_ok=True)
+        img_counter = 0
     for batch_labels in tqdm(dataloader, desc=f"Generating for eval epoch {epoch_num} ({tag})"):
         batch_labels = batch_labels.to(config["device"]) # Ensure labels are on the correct device
         generated_batch = generate_images(
@@ -189,6 +198,10 @@ def evaluate_model(
             use_guidance=config["use_classifier_guidance"], guidance_scale=config["guidance_scale"],
             device=config["device"], num_inference_steps=inference_steps
         )
+        if save_individual_images:
+            for single_img in denormalize(generated_batch.cpu()):
+                save_image(single_img, os.path.join(img_save_dir, f"{img_counter}.png"))
+                img_counter += 1
         all_generated_images.append(generated_batch.cpu())
         all_labels.append(batch_labels.cpu())
 
@@ -300,41 +313,6 @@ def generate_images(ddpm_model, cond_projector, scheduler, evaluator_obj,
         return images, torch.cat(denoising_process_images, dim=0)
     
     return images
-
-# Evaluate with test labels and new test labels
-
-def evaluate_model_with_labels(
-    model: UNet2DConditionModel, condition_projector: nn.Linear, noise_scheduler, 
-    evaluator_obj, test_labels_one_hot_tensor, 
-    new_test_labels_one_hot_tensor, epoch_num, config
-):
-    print(f"\n--- Evaluating model at epoch {epoch_num} ---")
-    # Evaluate on test.json
-    accuracy_test = evaluate_model(
-        dataset_name="test.json",
-        ddpm_model=model, 
-        cond_projector=condition_projector, 
-        scheduler=noise_scheduler, 
-        evaluator_obj=evaluator_obj,
-        test_labels_one_hot_tensor=test_labels_one_hot_tensor, 
-        epoch_num=epoch_num, 
-        config=config
-    )
-    print(f"Epoch {epoch_num} - Accuracy on test.json: {accuracy_test:.4f}")
-
-    # Evaluate on new_test.json
-    accuracy_new_test = evaluate_model(
-        dataset_name="new_test.json",
-        ddpm_model=model, 
-        cond_projector=condition_projector, 
-        scheduler=noise_scheduler, 
-        evaluator_obj=evaluator_obj,
-        test_labels_one_hot_tensor=new_test_labels_one_hot_tensor, 
-        epoch_num=epoch_num, 
-        config=config
-    )
-    print(f"Epoch {epoch_num} - Accuracy on new_test.json: {accuracy_new_test:.4f}")
-    return accuracy_test, accuracy_new_test
 
 def train_loop(config, model, condition_projector, noise_scheduler, optimizer, lr_scheduler, train_dataloader,
                test_loader_eval, evaluator_obj):
@@ -491,15 +469,18 @@ def train_loop(config, model, condition_projector, noise_scheduler, optimizer, l
         "final_epoch_loss": avg_epoch_loss
     })
 
+## 吃arg 但只吃train or evaluate
+def parse_args():
+    import argparse
+    parser = argparse.ArgumentParser(description="Train or evaluate the model.")
+    parser.add_argument("--mode", type=str, choices=["train", "evaluate"], default="train",
+                        help="Mode to run: 'train' to train the model, 'evaluate' to evaluate the model.")
+    args = parser.parse_args()
+    return args
 
 # --- Main Execution ---
 if __name__ == "__main__":
-    run = wandb.init(
-        project=CONFIG["wandb_project"],
-        name=CONFIG["wandb_run_name"],
-        config=CONFIG,  # 自動記錄所有配置
-        save_code=True  # 保存代碼版本
-    )
+    args = parse_args()
     # --- 1. Prepare Dataset ---
     print("Preparing dataset...")
     train_dataset = ICLEVRDataset(CONFIG["train_json_path"], objects_map, CONFIG["images_base_path"], CONFIG["image_size"], mode="train")
@@ -524,14 +505,19 @@ if __name__ == "__main__":
 
 
     # --- 2. Train Model (or load if exists) ---
-    TRAIN_MODEL = True # Set to False to skip training and load
     model_load_path = CONFIG["model_save_path"] # Default final model
-    # model_load_path = CONFIG["model_save_path"] + "_best_eval" # Optionally load best eval model
     
-    if TRAIN_MODEL:
+    if args.mode == "train":
+        run = wandb.init(
+            project=CONFIG["wandb_project"],
+            name=CONFIG["wandb_run_name"],
+            config=CONFIG,  # 自動記錄所有配置
+            save_code=True  # 保存代碼版本
+        )
         print("Starting training...")
         train_loop(CONFIG, model, condition_projector, noise_scheduler, optimizer, lr_scheduler, train_dataloader,
                    test_loader_eval, evaluator)
+        wandb.finish()
     else:
         print(f"Loading pre-trained model from {model_load_path}") # Use model_load_path
         if os.path.exists(model_load_path):
@@ -585,7 +571,8 @@ if __name__ == "__main__":
         scheduler=inference_scheduler,
         evaluator_obj=evaluator,
         epoch_num=CONFIG["num_epochs"],
-        config=CONFIG
+        config=CONFIG,
+        save_individual_images=True
     )
     print(f"Final Accuracy on test.json: {final_accuracy_test:.4f}")
     plt.figure(figsize=(3,1))
@@ -611,7 +598,8 @@ if __name__ == "__main__":
         scheduler=inference_scheduler,
         evaluator_obj=evaluator,
         epoch_num=CONFIG["num_epochs"],
-        config=CONFIG
+        config=CONFIG,
+        save_individual_images=True
     )
     print(f"Final Accuracy on new_test.json: {final_accuracy_new_test:.4f}")
     plt.figure(figsize=(3,1))
@@ -619,14 +607,6 @@ if __name__ == "__main__":
     plt.axis('off')
     plt.savefig(os.path.join(CONFIG["results_folder"], "accuracy_final_new_test_json.png"))
     # plt.show()
-
-    wandb.run.summary.update({
-        "final_test_accuracy": final_accuracy_test,
-        "final_new_test_accuracy": final_accuracy_new_test,
-        "dpm_solver_steps": CONFIG["dpm_solver_steps"] if CONFIG["inference_scheduler"] == "dpm_solver++" else None,
-        "num_inference_steps": CONFIG["num_inference_steps"],
-        "guidance_scale": CONFIG["guidance_scale"]
-    })
 
     # --- 4. Show Denoising Process ---
     # (This part remains the same, ensure model is in eval mode if not already)
@@ -651,8 +631,9 @@ if __name__ == "__main__":
         print(f"Warning: Denoising process captured only {denoising_steps_images.shape[0]} images. Will display all.")
     
     grid_denoising = make_grid(denormalize(denoising_steps_images), nrow=denoising_steps_images.shape[0])
-    save_image(grid_denoising, os.path.join(CONFIG["results_folder"], "denoising_process.png"))
-    print(f"Saved denoising process grid to {CONFIG['results_folder']}/denoising_process.png")
+    os.makedirs("images", exist_ok=True)
+    save_image(grid_denoising, os.path.join("images", "denoising_process.png"))
+    print(f"Saved denoising process grid to images/denoising_process.png")
 
     print("\nLab 6 execution finished.")
-    wandb.finish()
+    
